@@ -101,3 +101,108 @@ else
 fi
 
 echo ""
+
+# ─── 5. Détection : processus root suspects ───────────────────
+echo -e "${CYAN}[ Détection — processus root suspects ]${RESET}"
+
+# Processus légitimes connus qui tournent en root
+WHITELIST="systemd|kthreadd|kworker|ksoftirqd|migration|rcu_|init|sshd|cron|rsyslog|NetworkManager|dockerd|containerd|udevd|journald|logind|dbus|polkit|gdm|wpa_supplicant"
+
+ROOT_SUSPECTS=""
+
+while IFS= read -r line; do
+    pid=$(echo "$line"  | awk '{print $2}')
+    cmd=$(echo "$line"  | awk '{print $11}')
+    name=$(cat /proc/$pid/comm 2>/dev/null)
+
+    # Ignorer si dans la whitelist
+    if echo "$name" | grep -qE "$WHITELIST"; then
+        continue
+    fi
+
+    # Ignorer les threads kernel
+    ppid=$(awk '/PPid/{print $2}' /proc/$pid/status 2>/dev/null)
+    [[ "$ppid" == "2" || "$pid" == "2" ]] && continue
+
+    ROOT_SUSPECTS+="$(printf '%-8s %-10s %s\n' "$pid" "root" "$name")\n"
+
+done < <(ps aux --no-headers | awk '$1 == "root"')
+
+if [[ -z "$ROOT_SUSPECTS" ]]; then
+    echo -e "${GREEN}Aucun processus root suspect détecté.${RESET}"
+else
+    echo -e "${ORANGE}AVERTISSEMENT — Processus root hors whitelist :${RESET}"
+    echo -e "${DIM}PID      USER       COMMAND${RESET}"
+    echo -e "${DIM}-------- ---------- -------------------------${RESET}"
+    echo -e "${ORANGE}${ROOT_SUSPECTS}${RESET}"
+fi
+
+echo ""
+
+# ─── 6. Détection : ports suspects + connexions externes ──────
+echo -e "${CYAN}[ Détection — réseau ]${RESET}"
+
+# Ports légitimes connus
+PORT_WHITELIST="22|80|443|53|631|25|587|993|3306|5432|8080|8443"
+
+# ── 6a. Processus écoutant sur des ports inhabituels ──────────
+echo -e "${DIM}Ports en écoute hors whitelist :${RESET}"
+
+SUSPECT_PORTS=""
+
+while IFS= read -r line; do
+    port=$(echo "$line" | awk '{print $4}' | rev | cut -d: -f1 | rev)
+    pid=$(echo  "$line" | awk '{print $7}' | cut -d/ -f1 | tr -d ' ')
+    name=$(echo "$line" | awk '{print $7}' | cut -d/ -f2)
+
+    [[ -z "$port" || -z "$pid" ]] && continue
+
+    if ! echo "$port" | grep -qE "^($PORT_WHITELIST)$"; then
+        SUSPECT_PORTS+="$(printf '%-8s %-20s %s\n' "$pid" "$name" "$port")\n"
+    fi
+done < <(ss -tlnp 2>/dev/null | tail -n +2)
+
+if [[ -z "$SUSPECT_PORTS" ]]; then
+    echo -e "${GREEN}Aucun port suspect en écoute.${RESET}"
+else
+    echo -e "${ORANGE}AVERTISSEMENT — Ports hors whitelist :${RESET}"
+    echo -e "${DIM}PID      PROCESS              PORT${RESET}"
+    echo -e "${DIM}-------- -------------------- -----${RESET}"
+    echo -e "${ORANGE}${SUSPECT_PORTS}${RESET}"
+fi
+
+echo ""
+
+# ── 6b. Connexions actives vers IPs externes ──────────────────
+echo -e "${DIM}Connexions actives vers IPs externes :${RESET}"
+
+EXTERNAL_CONNS=""
+
+while IFS= read -r line; do
+    remote=$(echo "$line" | awk '{print $5}')
+    ip=$(echo "$remote"   | rev | cut -d: -f2- | rev)
+    port=$(echo "$remote" | rev | cut -d: -f1  | rev)
+    proc=$(echo "$line"   | awk '{print $7}')
+
+    [[ -z "$ip" ]] && continue
+
+    # Ignorer localhost, IPs privées et multicast
+    if echo "$ip" | grep -qE \
+        '^(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|::1|fe80|0\.0\.0\.0|\*)'; then
+        continue
+    fi
+
+    EXTERNAL_CONNS+="$(printf '%-20s %-6s %s\n' "$ip" "$port" "$proc")\n"
+
+done < <(ss -tnp state established 2>/dev/null | tail -n +2)
+
+if [[ -z "$EXTERNAL_CONNS" ]]; then
+    echo -e "${GREEN}Aucune connexion externe active.${RESET}"
+else
+    echo -e "${RED}ALERTE — Connexions vers IPs externes :${RESET}"
+    echo -e "${DIM}IP DISTANTE          PORT   PROCESS${RESET}"
+    echo -e "${DIM}-------------------- ------ -------------------------${RESET}"
+    echo -e "${RED}${EXTERNAL_CONNS}${RESET}"
+fi
+
+echo ""
