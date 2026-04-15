@@ -44,7 +44,8 @@ CPU_THRESHOLD=50
 RAM_THRESHOLD=20
 
 HIGH_CPU=$(ps aux --no-headers | awk -v threshold="$CPU_THRESHOLD" \
-    '$3 > threshold {printf "%-8s %-10s %-5s %-5s %s\n", $2, $1, $3, $4, $11}')
+    '$3 > threshold && $11 !~ /ps|awk|bash/ \
+    {printf "%-8s %-10s %-5s %-5s %s\n", $2, $1, $3, $4, $11}')
 
 HIGH_RAM=$(ps aux --no-headers | awk -v threshold="$RAM_THRESHOLD" \
     '$4 > threshold {printf "%-8s %-10s %-5s %-5s %s\n", $2, $1, $3, $4, $11}')
@@ -81,7 +82,13 @@ GHOSTS=""
 while IFS= read -r pid; do
     # Ignorer les threads kernel (pas de /proc/PID/exe ET ppid=2)
     ppid=$(awk '/PPid/{print $2}' /proc/$pid/status 2>/dev/null)
-    [[ "$ppid" == "2" || "$pid" == "2" ]] && continue
+    [[ "$ppid" == "2" || "$ppid" == "1" || "$pid" == "2" ]] && continue
+
+
+    GHOST_WHITELIST="systemd|ssh-agent|fusermount|sd-pam|gdm|systemd-userwor"
+    if echo "$cmd" | grep -qE "$GHOST_WHITELIST"; then
+        continue
+    fi
 
     exe=$(readlink -f /proc/$pid/exe 2>/dev/null)
     if [[ -z "$exe" || "$exe" == *"(deleted)"* ]]; then
@@ -106,8 +113,7 @@ echo ""
 echo -e "${CYAN}[ Détection — processus root suspects ]${RESET}"
 
 # Processus légitimes connus qui tournent en root
-WHITELIST="systemd|kthreadd|kworker|ksoftirqd|migration|rcu_|init|sshd|cron|rsyslog|NetworkManager|dockerd|containerd|udevd|journald|logind|dbus|polkit|gdm|wpa_supplicant"
-
+WHITELIST="systemd|kthreadd|kworker|ksoftirqd|migration|rcu_|init|sshd|cron|rsyslog|NetworkManager|dockerd|containerd|udevd|journald|logind|dbus|polkit|gdm|wpa_supplicant|haveged|smartd|ModemManager|upowerd|udisksd|fwupd|accounts|power-profiles|fusermount|pcscd"
 ROOT_SUSPECTS=""
 
 while IFS= read -r line; do
@@ -122,7 +128,8 @@ while IFS= read -r line; do
 
     # Ignorer les threads kernel
     ppid=$(awk '/PPid/{print $2}' /proc/$pid/status 2>/dev/null)
-    [[ "$ppid" == "2" || "$pid" == "2" ]] && continue
+    [[ "$ppid" == "2" || "$ppid" == "1" || "$pid" == "2" ]] && continue
+    [[ "$pid"  == "1" ]] && continue
 
     ROOT_SUSPECTS+="$(printf '%-8s %-10s %s\n' "$pid" "root" "$name")\n"
 
@@ -179,20 +186,22 @@ echo -e "${DIM}Connexions actives vers IPs externes :${RESET}"
 EXTERNAL_CONNS=""
 
 while IFS= read -r line; do
+    # Extraire IP:PORT distante (5ème colonne)
     remote=$(echo "$line" | awk '{print $5}')
-    ip=$(echo "$remote"   | rev | cut -d: -f2- | rev)
-    port=$(echo "$remote" | rev | cut -d: -f1  | rev)
-    proc=$(echo "$line"   | awk '{print $7}')
+    ip=$(echo "$remote" | sed 's/:\([0-9]*\)$//' | tr -d '[]')
+    port=$(echo "$remote" | grep -oE ':[0-9]+$' | tr -d ':')
+    # Extraire nom du processus
+    proc=$(echo "$line" | grep -oP '"\K[^"]+(?=")' | head -1)
 
-    [[ -z "$ip" ]] && continue
+    [[ -z "$ip" || -z "$port" ]] && continue
 
-    # Ignorer localhost, IPs privées et multicast
+    # Ignorer IPs privées et locales
     if echo "$ip" | grep -qE \
-        '^(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|::1|fe80|0\.0\.0\.0|\*)'; then
+        '^(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|::1|fe80|0\.0\.0\.0|\*|-)'; then
         continue
     fi
 
-    EXTERNAL_CONNS+="$(printf '%-20s %-6s %s\n' "$ip" "$port" "$proc")\n"
+    EXTERNAL_CONNS+="$(printf '%-25s %-6s %s\n' "$ip" "$port" "${proc:-inconnu}")\n"
 
 done < <(ss -tnp state established 2>/dev/null | tail -n +2)
 
@@ -200,8 +209,8 @@ if [[ -z "$EXTERNAL_CONNS" ]]; then
     echo -e "${GREEN}Aucune connexion externe active.${RESET}"
 else
     echo -e "${RED}ALERTE — Connexions vers IPs externes :${RESET}"
-    echo -e "${DIM}IP DISTANTE          PORT   PROCESS${RESET}"
-    echo -e "${DIM}-------------------- ------ -------------------------${RESET}"
+    echo -e "${DIM}IP DISTANTE               PORT   PROCESS${RESET}"
+    echo -e "${DIM}------------------------- ------ ----------${RESET}"
     echo -e "${RED}${EXTERNAL_CONNS}${RESET}"
 fi
 
