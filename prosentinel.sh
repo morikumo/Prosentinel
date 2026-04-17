@@ -11,7 +11,11 @@ DIM='\033[2m'
 RESET='\033[0m'
 ORANGE='\033[0;33m'
 
-echo -e "${CYAN}ProSentinel v0.1${RESET} — ${DIM}$(date '+%Y-%m-%d %H:%M:%S')${RESET}\n"
+# ─── Mode daemon ──────────────────────────────────────────────
+DAEMON_INTERVAL=60  # secondes entre chaque scan
+
+run_scan() {
+    echo -e "${CYAN}ProSentinel${RESET} — ${DIM}$(date '+%Y-%m-%d %H:%M:%S')${RESET}\n"
 
 # ─── 1. Liste des processus ───────────────────────────────────
 echo -e "${DIM}PID      USER       CPU%  MEM%  COMMAND${RESET}"
@@ -215,3 +219,25 @@ else
 fi
 
 echo ""
+}
+
+
+# ─── Point d'entrée ───────────────────────────────────────────
+case "$1" in
+    --daemon)
+        echo -e "${CYAN}ProSentinel démarré en mode daemon${RESET} — scan toutes les ${DAEMON_INTERVAL}s"
+        echo -e "${DIM}Logs : /var/log/prosentinel.log${RESET}\n"
+        while true; do
+            run_scan >> /var/log/prosentinel.log 2>&1
+            sleep "$DAEMON_INTERVAL"
+        done
+        ;;
+    --scan|"")
+        run_scan
+        ;;
+    *)
+        echo -e "${RED}Flag inconnu :${RESET} $1"
+        echo "Usage: ./prosentinel.sh [--scan|--daemon]"
+        exit 1
+        ;;
+esac
