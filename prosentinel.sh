@@ -11,7 +11,11 @@ DIM='\033[2m'
 RESET='\033[0m'
 ORANGE='\033[0;33m'
 
-echo -e "${CYAN}ProSentinel v0.1${RESET} — ${DIM}$(date '+%Y-%m-%d %H:%M:%S')${RESET}\n"
+# ─── Mode daemon ──────────────────────────────────────────────
+DAEMON_INTERVAL=60  # secondes entre chaque scan
+
+run_scan() {
+    echo -e "${CYAN}ProSentinel${RESET} — ${DIM}$(date '+%Y-%m-%d %H:%M:%S')${RESET}\n"
 
 # ─── 1. Liste des processus ───────────────────────────────────
 echo -e "${DIM}PID      USER       CPU%  MEM%  COMMAND${RESET}"
@@ -215,3 +219,69 @@ else
 fi
 
 echo ""
+}
+
+
+# ─── Point d'entrée ───────────────────────────────────────────
+# ─── Point d'entrée ───────────────────────────────────────────
+usage() {
+    echo -e "${CYAN}ProSentinel v0.1${RESET} — Process Security Monitor"
+    echo ""
+    echo -e "Usage: ./prosentinel.sh ${DIM}[OPTIONS]${RESET}"
+    echo ""
+    echo -e "  ${GREEN}--scan${RESET}      Lancer un scan unique"
+    echo -e "  ${GREEN}--daemon${RESET}    Installer et démarrer en arrière-plan"
+    echo -e "  ${GREEN}--stop${RESET}      Arrêter le daemon"
+    echo -e "  ${GREEN}--status${RESET}    Voir l'état du daemon"
+    echo ""
+}
+
+if [[ $# -eq 0 ]]; then
+    usage
+    exit 0
+fi
+
+case "$1" in
+    --scan)
+        run_scan
+        ;;
+    --daemon)
+        INSTALL_SCRIPT="$(dirname "$(realpath "$0")")/install.sh"
+        if [[ ! -f /etc/systemd/system/prosentinel.service ]]; then
+            echo -e "${CYAN}Premier lancement — installation du service...${RESET}"
+            if [[ -x "$INSTALL_SCRIPT" ]]; then
+                sudo bash "$INSTALL_SCRIPT"
+            else
+                echo -e "${RED}install.sh introuvable ou non exécutable.${RESET}"
+                exit 1
+            fi
+        else
+            echo -e "${CYAN}Service déjà installé — démarrage...${RESET}"
+            sudo systemctl start prosentinel
+            echo -e "${GREEN}ProSentinel démarré.${RESET}"
+            echo -e "${DIM}Logs : sudo tail -f /var/log/prosentinel.log${RESET}"
+        fi
+        ;;
+    --stop)
+        echo -e "${CYAN}Arrêt de ProSentinel...${RESET}"
+        sudo systemctl stop prosentinel
+        echo -e "${GREEN}ProSentinel arrêté.${RESET}"
+        ;;
+    --disable-daemon)
+        echo -e "${CYAN}Désinstallation de ProSentinel...${RESET}"
+        sudo systemctl stop prosentinel
+        sudo systemctl disable prosentinel
+        sudo rm -f /etc/systemd/system/prosentinel.service
+        sudo rm -f /var/log/prosentinel.log
+        sudo systemctl daemon-reload
+        echo -e "${GREEN}ProSentinel désinstallé.${RESET}"
+        ;;
+    --status)
+        sudo systemctl status prosentinel
+        ;;
+    *)
+        echo -e "${RED}Flag inconnu :${RESET} $1"
+        usage
+        exit 1
+        ;;
+esac
